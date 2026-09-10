@@ -1,80 +1,96 @@
 <p align="center">
-  <img src="banner.png" alt="WaDeskLight" width="100%">
+  <img src="banner.png" alt="WaDeskLight Banner" width="100%">
 </p>
 
-# WaDeskLight
+<h3 align="center">Lightweight WhatsApp Desktop Client for Windows</h3>
 
-Lightweight Windows desktop wrapper for [WhatsApp Web](https://web.whatsapp.com), built with Go and Microsoft Edge WebView2.
+<p align="center">
+  Built with Go + WebView2. No Electron. No bloat. Just WhatsApp.
+</p>
 
-## Features
+---
 
-- Native Windows WebView2 window — no Electron, no Chromium bloat.
-- Persistent WhatsApp session across restarts.
-- System tray — close minimizes to tray, click restores, balloon notifications.
-- Window size and position remembered between sessions.
-- Dark Windows title bar and frame.
-- Notification bridge via system tray balloon.
-- Camera and microphone access for WhatsApp voice and video calls.
-- Single-instance protection.
-- High-DPI display support.
-- Small native executable (~3 MB).
+## About
 
-## Requirements
+**WaDeskLight** is a minimal, native Windows wrapper for WhatsApp Web. Instead of bundling a full Chromium engine like Electron apps, it uses the WebView2 runtime already present on Windows 10/11 to render WhatsApp Web in a clean, dark-themed window with system tray integration.
 
-- Windows 10 or newer.
-- Microsoft Edge WebView2 Runtime (the app shows a download prompt when missing).
-- WhatsApp account paired with WhatsApp Web.
+Originally forked from [Adytm404/whatsapp-web.view](https://github.com/Adytm404/whatsapp-web.view), this project has been heavily reworked with new features, performance improvements, and a fresh identity.
 
-## Download
+## Highlights
 
-Download `WhatsApp.exe` from the latest [GitHub Release](https://github.com/Adytm404/whatsapp-web.view/releases).
+| Feature | Details |
+|---------|---------|
+| Ultra-lightweight | ~3 MB executable, no bundled browser engine |
+| System tray | Minimize to tray on close, restore with single click |
+| Dark mode | Native dark title bar and window frame |
+| Persistent session | WhatsApp login survives app restarts |
+| Window memory | Remembers size and position between sessions |
+| Notifications | Tray balloon notifications for incoming messages |
+| Calls support | Camera and microphone passthrough for voice/video calls |
+| Single instance | Only one window at a time, duplicate launches auto-focus existing window |
+| High-DPI | Full PerMonitorV2 DPI awareness |
+| Auto-detect WebView2 | Shows install prompt if WebView2 Runtime is missing |
 
-Run the executable, scan the QR code, allow camera and microphone access when prompted by Windows, and keep using WhatsApp normally. The session is saved automatically.
+## Quick Start
 
-## Session Data
+1. Download [`WhatsApp.exe`](https://github.com/rayss868/WaDeskLight/releases/latest) from Releases
+2. Run it, scan the QR code with your phone
+3. Allow camera/mic access when Windows prompts you
+4. That's it — your session is saved automatically
 
-Profile data is stored at:
+## Session & Data
+
+All profile data (cookies, localStorage, IndexedDB) is stored locally:
 
 ```text
 %APPDATA%\WaDeskLight\UserData
 ```
 
-Do not delete this folder if the existing login session must remain available. Closing the app does not clear session data.
+Back up this folder to preserve your login. Deleting it will require re-pairing your device.
 
-## Build From Source
+## Building from Source
 
-Install Go and a Windows C compiler (MinGW or TDM-GCC), then run:
+**Prerequisites:**
+- [Go](https://go.dev/dl/) 1.22+
+- [MinGW-w64](https://www.mingw-w64.org/) or TDM-GCC (for `windres`)
 
 ```powershell
-go mod download
+# Generate resource object
+windres resource.rc -O coff -o rsrc.syso
+
+# Build (hidden console window, stripped binary)
 go build -ldflags="-H windowsgui -s -w" -o WhatsApp.exe .
 ```
 
-The repository includes the Windows manifest (DPI aware), embedded icon, and version metadata (VERSIONINFO) used by the build.
+The output `WhatsApp.exe` includes embedded icon, DPI manifest, and Windows VERSIONINFO metadata.
 
-## Project Structure
+## Tech Stack
 
-| File | Description |
-|------|-------------|
-| `main.go` | WebView2 window, persistent profile, dark frame, tray, and notifications |
-| `app.manifest` | Windows DPI and application manifest |
-| `resource.rc` | Windows icon, manifest, and version metadata |
-| `icon.ico` | Application icon |
-| `banner.png` | Project banner image |
+- **Language:** Go
+- **WebView:** [go-webview2](https://github.com/jchv/go-webview2) (Microsoft Edge WebView2)
+- **Tray:** Win32 `Shell_NotifyIconW` API
+- **Window frame:** `DwmSetWindowAttribute` for dark mode
+- **Notifications:** System tray balloon via `NIF_INFO`
 
-## How It Works
+## Project Layout
 
-1. Checks for an existing instance (mutex) and brings the existing window to focus if found.
-2. Verifies WebView2 Runtime is installed (shows error dialog if not).
-3. Creates a WebView2 window with dark frame and loads `https://web.whatsapp.com`.
-4. Injects a User-Agent override and a Notification API polyfill that bridges to native system tray balloons.
-5. Saves window position on close; restores it on next launch.
-6. Hides to system tray on close instead of quitting.
+```
+whatsapp-web.view/
+├── main.go           # Application entry point, WebView2 setup, tray, notifications
+├── icon.ico          # Application icon
+├── resource.rc       # Windows resource script (icon, manifest, version info)
+├── rsrc.syso         # Compiled resource object
+├── app.manifest      # DPI awareness and Common Controls manifest
+├── banner.png        # Project banner
+├── gen_icon.py       # Icon generation helper
+├── go.mod / go.sum   # Go module definition
+└── vendor/           # Vendored dependencies
+```
 
-## Privacy
+## Disclaimer
 
-This app loads WhatsApp Web directly. Chat data and authentication state are handled by WhatsApp Web and stored locally in the profile directory above. This project is not affiliated with WhatsApp or Meta.
+This project is **not affiliated with or endorsed by WhatsApp LLC or Meta Platforms, Inc.** It is an independent, open-source tool that wraps the official WhatsApp Web interface. Use at your own discretion.
 
 ## License
 
-No license has been declared yet.
+This project does not currently have a declared license.
