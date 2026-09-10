@@ -398,6 +398,12 @@ func main() {
 		},
 	}
 
+	// Trim memory footprint: limit renderer count and disable unused Chromium
+	// components (SmartScreen, in-app PDF viewer, background networking).
+	// Read by WebView2 loader when the environment is created.
+	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+		"--renderer-process-limit=2 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update --no-first-run --disable-sync")
+
 	w := webview2.NewWithOptions(opts)
 	if w == nil {
 		showErrorDialog("Gagal menginisialisasi WebView2. Pastikan Microsoft Edge WebView2 Runtime terinstall.")
