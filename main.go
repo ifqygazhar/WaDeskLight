@@ -402,7 +402,7 @@ func main() {
 	// components (SmartScreen, in-app PDF viewer, background networking).
 	// Read by WebView2 loader when the environment is created.
 	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-		"--renderer-process-limit=2 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update --no-first-run --disable-sync")
+		"--renderer-process-limit=1 --process-per-site --disable-site-isolation-trials --disable-gpu --disable-gpu-compositing --disable-features=SitePerProcess,IsolateOrigins,OutOfProcessNetworkService,msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update --no-first-run --disable-sync")
 
 	w := webview2.NewWithOptions(opts)
 	if w == nil {
