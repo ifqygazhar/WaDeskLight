@@ -33,10 +33,13 @@ Originally forked from [Adytm404/whatsapp-web.view](https://github.com/Adytm404/
 
 ## Quick Start
 
-1. Download [`WhatsApp.exe`](https://github.com/rayss868/WaDeskLight/releases/latest) from Releases
-2. Run it, scan the QR code with your phone
-3. Allow camera/mic access when Windows prompts you
-4. That's it — your session is saved automatically
+1. Download [`WaDeskLightSetup.exe`](https://github.com/rayss868/WaDeskLight/releases/latest) from Releases
+2. Run the installer — it adds a "WhatsApp" shortcut to your Start Menu automatically
+3. Scan the QR code with your phone
+4. Allow camera/mic access when Windows prompts you
+5. That's it — your session is saved automatically
+
+> The setup installs the app under `%LOCALAPPDATA%\Programs\WaDeskLight` and creates a **WhatsApp** shortcut, so it shows up when you search "wa" in Windows. A portable `WhatsApp.exe` is also available for those who prefer no installer.
 
 ## Session & Data
 
