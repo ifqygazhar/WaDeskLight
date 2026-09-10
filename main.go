@@ -47,16 +47,16 @@ const (
 	// DWM Window Attributes for Dark Theme
 	DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
 	DWMWA_USE_IMMERSIVE_DARK_MODE             = 20
-	DWMWA_CAPTION_COLOR                      = 35
-	DWMWA_TEXT_COLOR                         = 36
+	DWMWA_CAPTION_COLOR                       = 35
+	DWMWA_TEXT_COLOR                          = 36
 
 	// Win32 messages
-	wmClose            = 0x0010
-	wmLButtonUp        = 0x0202
-	wmRButtonUp        = 0x0205
-	wmLButtonDblClk    = 0x0203
-	wmApp              = 0x8000
-	wmTrayCallback     = wmApp + 1
+	wmClose             = 0x0010
+	wmLButtonUp         = 0x0202
+	wmRButtonUp         = 0x0205
+	wmLButtonDblClk     = 0x0203
+	wmApp               = 0x8000
+	wmTrayCallback      = wmApp + 1
 	ninBalloonUserClick = wmApp + 5
 
 	// ShowWindow commands
@@ -64,14 +64,14 @@ const (
 	swRestore = 9
 
 	// SetWindowLongPtr / SetWindowPos
-	gwlpWndProc       = ^uintptr(3) // -4
-	swpNoZOrder       = 0x0004
-	swpNoActivate     = 0x0010
+	gwlpWndProc   = ^uintptr(3) // -4
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
 
 	// Tray icon
-	nimAdd    = 0
-	nimModify = 1
-	nimDelete = 2
+	nimAdd     = 0
+	nimModify  = 1
+	nimDelete  = 2
 	nifMessage = 0x00000001
 	nifIcon    = 0x00000002
 	nifTip     = 0x00000004
@@ -253,9 +253,9 @@ func copyUTF16(dst []uint16, s string) {
 	copy(dst, src)
 }
 
-func setTip(n *notifyIconData, s string)  { copyUTF16(n.szTip[:], s) }
+func setTip(n *notifyIconData, s string)       { copyUTF16(n.szTip[:], s) }
 func setInfoTitle(n *notifyIconData, s string) { copyUTF16(n.szInfoTitle[:], s) }
-func setInfo(n *notifyIconData, s string) { copyUTF16(n.szInfo[:], s) }
+func setInfo(n *notifyIconData, s string)      { copyUTF16(n.szInfo[:], s) }
 
 func loadTrayIcon(iconPath string) uintptr {
 	pathPtr, _ := windows.UTF16PtrFromString(iconPath)
@@ -410,6 +410,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer w.Destroy()
+	startAudioSessionLabeler()
 
 	hwnd := uintptr(w.Window())
 	setDarkWindowFrame(hwnd)
