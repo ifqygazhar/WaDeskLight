@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package audio
 
 import (
 	"runtime"
@@ -18,7 +18,10 @@ const (
 	th32csSnapProcess = 0x00000002
 )
 
-func startAudioSessionLabeler() {
+// StartLabeler periodically renames the audio sessions of the WebView2
+// renderer processes owned by the current process to "WhatsApp", so the
+// WhatsApp audio appears under that name in the Windows volume mixer.
+func StartLabeler() {
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -36,7 +39,7 @@ func startAudioSessionLabeler() {
 }
 
 func labelAudioSessions() {
-	processIDs := wadeskLightWebViewProcesses(uint32(osGetpid()))
+	processIDs := wadeskLightWebViewProcesses(uint32(syscall.Getpid()))
 	if len(processIDs) == 0 {
 		return
 	}
@@ -134,8 +137,4 @@ func wadeskLightWebViewProcesses(rootPID uint32) map[uint32]bool {
 		}
 	}
 	return result
-}
-
-func osGetpid() int {
-	return syscall.Getpid()
 }

@@ -1,4 +1,13 @@
+# Build outputs
 WhatsApp.exe
-WhatsApp.exe~
+dist/
+build/rsrc_windows_amd64.syso
+build/extract_test/
+
+# Inno Setup installer
+WaDeskLightSetup.exe
+
+# Windows junk
 *.tmp
 *.log
+*.exe~

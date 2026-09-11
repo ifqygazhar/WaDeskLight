@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.png" alt="WaDeskLight Banner" width="100%">
+  <img src="assets/banner.png" alt="WaDeskLight Banner" width="100%">
 </p>
 
 <h3 align="center">Lightweight WhatsApp Desktop Client for Windows</h3>
@@ -53,17 +53,22 @@ Back up this folder to preserve your login. Deleting it will require re-pairing 
 
 **Prerequisites:**
 - [Go](https://go.dev/dl/) 1.22+
-- [MinGW-w64](https://www.mingw-w64.org/) or TDM-GCC (for `windres`)
+- [go-winres](https://github.com/tc-hib/go-winres) (pure Go resource compiler, no MinGW/windres needed)
+  ```
+  go install github.com/tc-hib/go-winres@latest
+  ```
 
-```powershell
-# Generate resource object
-windres resource.rc -O coff -o rsrc.syso
+```bash
+# One-shot build (compiles resources and the executable into dist/)
+./scripts/build.sh
 
-# Build (hidden console window, stripped binary)
-go build -ldflags="-H windowsgui -s -w" -o WhatsApp.exe .
+# Or manually:
+# go-winres make -arch amd64 --in winres.json   (run inside build/)
+# cp build/rsrc_windows_amd64.syso cmd/wadesklight/rsrc.syso
+# go build -ldflags="-H windowsgui -s -w" -o dist/WhatsApp.exe ./cmd/wadesklight
 ```
 
-The output `WhatsApp.exe` includes embedded icon, DPI manifest, and Windows VERSIONINFO metadata.
+The output `dist\WhatsApp.exe` includes embedded icon, DPI manifest, and Windows VERSIONINFO metadata.
 
 ## Tech Stack
 
@@ -77,15 +82,20 @@ The output `WhatsApp.exe` includes embedded icon, DPI manifest, and Windows VERS
 
 ```
 whatsapp-web.view/
-├── main.go           # Application entry point, WebView2 setup, tray, notifications
-├── icon.ico          # Application icon
-├── resource.rc       # Windows resource script (icon, manifest, version info)
-├── rsrc.syso         # Compiled resource object
-├── app.manifest      # DPI awareness and Common Controls manifest
-├── banner.png        # Project banner
-├── gen_icon.py       # Icon generation helper
-├── go.mod / go.sum   # Go module definition
-└── vendor/           # Vendored dependencies
+├── cmd/
+│   └── wadesklight/
+│       ├── main.go        # Thin entry point
+│       └── rsrc.syso      # Compiled Windows resources (icon, manifest, version) 
+├── internal/
+│   ├── app/               # WebView2 window, tray, notifications, state persistence
+│   └── audio/             # Core Audio session labeler (volume mixer shows "WhatsApp")
+├── assets/                # icon.ico (multi-size), icon.png, banner.png
+├── build/                 # winres.json, winres/ data, app.manifest (resources source)
+├── scripts/
+│   └── build.sh           # One-shot resource + executable build
+├── dist/                  # Build output (WhatsApp.exe)
+├── go.mod / go.sum        # Go module definition
+└── vendor/                # Vendored dependencies
 ```
 
 ## Disclaimer
