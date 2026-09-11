@@ -14,8 +14,6 @@
 
 **WaDeskLight** is a minimal, native Windows wrapper for WhatsApp Web. Instead of bundling a full Chromium engine like Electron apps, it uses the WebView2 runtime already present on Windows 10/11 to render WhatsApp Web in a clean, dark-themed window with system tray integration.
 
-Originally forked from [Adytm404/whatsapp-web.view](https://github.com/Adytm404/whatsapp-web.view), this project has been heavily reworked with new features, performance improvements, and a fresh identity.
-
 ## Highlights
 
 | Feature | Details |
