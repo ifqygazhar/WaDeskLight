@@ -9,6 +9,7 @@ var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	shell32  = windows.NewLazySystemDLL("shell32.dll")
 	dwmapi   = windows.NewLazySystemDLL("dwmapi.dll")
+	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
 
 	procCreateMutex      = kernel32.NewProc("CreateMutexW")
 	procFindWindow       = user32.NewProc("FindWindowW")
@@ -29,6 +30,12 @@ var (
 	procDestroyMenu      = user32.NewProc("DestroyMenu")
 	procGetCursorPos     = user32.NewProc("GetCursorPos")
 	procShellNotifyIcon  = shell32.NewProc("Shell_NotifyIconW")
+
+	procCreateIconIndirect = user32.NewProc("CreateIconIndirect")
+	procDestroyIcon        = user32.NewProc("DestroyIcon")
+	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
+	procCreateBitmap       = gdi32.NewProc("CreateBitmap")
+	procDeleteObject       = gdi32.NewProc("DeleteObject")
 )
 
 // Win32 constants used by the window, tray, and dark-frame code.
@@ -58,19 +65,22 @@ const (
 	swpNoActivate = 0x0010
 
 	// Tray icon
-	nimAdd     = 0
-	nimModify  = 1
-	nimDelete  = 2
-	nifMessage = 0x00000001
-	nifIcon    = 0x00000002
-	nifTip     = 0x00000004
-	nifInfo    = 0x00000010
-	niifInfo   = 0x00000001
+	nimAdd        = 0
+	nimModify     = 1
+	nimDelete     = 2
+	nifMessage    = 0x00000001
+	nifIcon       = 0x00000002
+	nifTip        = 0x00000004
+	nifInfo       = 0x00000010
+	niifInfo      = 0x00000001
+	niifUser      = 0x00000004
+	niifLargeIcon = 0x00000020
 
 	// Icons
 	imageIcon      = 1
 	lrLoadFromFile = 0x0010
 	idiApplication = 32512
+	dibRGBColors   = 0
 
 	// Tray popup menu
 	tpmReturnCmd = 0x0100

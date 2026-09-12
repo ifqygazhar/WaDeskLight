@@ -3,10 +3,13 @@
 package app
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -61,6 +64,12 @@ var (
 	gWinProc uintptr
 	gOldProc uintptr
 	gTray    notifyIconData
+
+	gTrayMu sync.Mutex
+	// Large app icon used as the balloon icon when a message carries no avatar.
+	gAppBalloonIcon uintptr
+	// Avatar icon of the most recent notification, owned by us.
+	gBalloonIcon uintptr
 )
 
 func setDarkWindowFrame(hwnd uintptr) {
@@ -189,9 +198,9 @@ func setTip(n *notifyIconData, s string)       { copyUTF16(n.szTip[:], s) }
 func setInfoTitle(n *notifyIconData, s string) { copyUTF16(n.szInfoTitle[:], s) }
 func setInfo(n *notifyIconData, s string)      { copyUTF16(n.szInfo[:], s) }
 
-func loadTrayIcon(iconPath string) uintptr {
+func loadTrayIcon(iconPath string, size uintptr) uintptr {
 	pathPtr, _ := windows.UTF16PtrFromString(iconPath)
-	hIcon, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(pathPtr)), imageIcon, 16, 16, lrLoadFromFile)
+	hIcon, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(pathPtr)), imageIcon, size, size, lrLoadFromFile)
 	if hIcon != 0 {
 		return hIcon
 	}
@@ -209,21 +218,63 @@ func trayAdd(hwnd uintptr, iconPath string) {
 	nid.uID = 1
 	nid.uFlags = nifMessage | nifIcon | nifTip
 	nid.uCallbackMessage = wmTrayCallback
-	nid.hIcon = loadTrayIcon(iconPath)
+	nid.hIcon = loadTrayIcon(iconPath, 16)
 	setTip(&nid, "WaDeskLight")
+	gAppBalloonIcon = loadTrayIcon(iconPath, 32)
 	gTray = nid
 	procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
 }
 
-func trayBalloon(title, message string) {
+// trayBalloon shows a notification. iconData, when it decodes to an image, is
+// used as the balloon icon so the sender's avatar appears; otherwise the app
+// icon is used. Passing nil is fine for app-generated messages.
+func trayBalloon(title, message string, iconData []byte) {
+	gTrayMu.Lock()
+	defer gTrayMu.Unlock()
 	if gTray.hWnd == 0 {
 		return
 	}
-	gTray.uFlags = nifInfo
+
+	// NIF_INFO alone would drop the icon, tip, and callback flags.
+	gTray.uFlags = nifMessage | nifIcon | nifTip | nifInfo
 	setInfoTitle(&gTray, title)
 	setInfo(&gTray, message)
-	gTray.dwInfoFlags = niifInfo
+
+	avatar := createIconFromImage(decodeIconImage(iconData))
+	icon := avatar
+	if icon == 0 {
+		icon = gAppBalloonIcon
+	}
+	if icon != 0 {
+		gTray.hBalloonIcon = icon
+		gTray.dwInfoFlags = niifUser | niifLargeIcon
+	} else {
+		gTray.dwInfoFlags = niifInfo
+	}
 	procShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&gTray)))
+
+	// Release the previous avatar, not the one just handed to the shell.
+	if gBalloonIcon != 0 {
+		procDestroyIcon.Call(gBalloonIcon)
+	}
+	gBalloonIcon = avatar
+}
+
+// decodeDataURL unwraps a base64 "data:image/...;base64,..." URL.
+func decodeDataURL(s string) []byte {
+	const marker = ";base64,"
+	if !strings.HasPrefix(s, "data:image/") {
+		return nil
+	}
+	i := strings.Index(s, marker)
+	if i < 0 {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(s[i+len(marker):])
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func trayDelete() {
@@ -232,6 +283,10 @@ func trayDelete() {
 	}
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&gTray)))
 	gTray.hWnd = 0
+	if gBalloonIcon != 0 {
+		procDestroyIcon.Call(gBalloonIcon)
+		gBalloonIcon = 0
+	}
 }
 
 func saveWindowBounds(hwnd uintptr) {
@@ -248,6 +303,7 @@ func saveWindowBounds(hwnd uintptr) {
 }
 
 func restoreWindow(hwnd uintptr) {
+	setMemoryUsageTargetLevel(memoryUsageNormal)
 	procShowWindow.Call(hwnd, swRestore)
 	procSetFgWindow.Call(hwnd)
 }
@@ -280,7 +336,8 @@ func windowProc(hwnd, msg, wp, lp uintptr) uintptr {
 		// Close-to-tray: hide the window and keep running in the background.
 		saveWindowBounds(hwnd)
 		procShowWindow.Call(hwnd, swHide)
-		go trayBalloon("WaDeskLight", "Masih berjalan di system tray. Klik ikon untuk membuka kembali.")
+		setMemoryUsageTargetLevel(memoryUsageLow)
+		go trayBalloon("WaDeskLight", "Masih berjalan di system tray. Klik ikon untuk membuka kembali.", nil)
 		return 0
 	case wmTrayCallback:
 		switch uint32(lp) & 0xFFFF {
@@ -335,8 +392,12 @@ func Run() int {
 	// Trim memory footprint: limit renderer count and disable unused Chromium
 	// components (SmartScreen, in-app PDF viewer, background networking).
 	// Read by WebView2 loader when the environment is created.
+	//
+	// max-old-space-size caps V8's old space. It does not free memory by
+	// itself; it makes GC run sooner. Too low a value crashes the renderer on
+	// large chat histories, so 512 MB is deliberately conservative.
 	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-		"--renderer-process-limit=1 --process-per-site --disable-site-isolation-trials --disable-gpu --disable-gpu-compositing --disable-features=SitePerProcess,IsolateOrigins,OutOfProcessNetworkService,msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update --no-first-run --disable-sync")
+		"--js-flags=--max-old-space-size=512 --renderer-process-limit=1 --process-per-site --disable-site-isolation-trials --disable-gpu --disable-gpu-compositing --disable-features=SitePerProcess,IsolateOrigins,OutOfProcessNetworkService,msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update --no-first-run --disable-sync")
 
 	w := webview2.NewWithOptions(opts)
 	if w == nil {
@@ -344,6 +405,7 @@ func Run() int {
 		return 1
 	}
 	defer w.Destroy()
+	initMemoryControl(w)
 	audio.StartLabeler()
 
 	hwnd := uintptr(w.Window())
@@ -359,8 +421,9 @@ func Run() int {
 	defer trayDelete()
 
 	w.SetTitle(windowTitle)
-	_ = w.Bind("sendNativeNotification", func(title, body string) {
-		go trayBalloon(title, body)
+	_ = w.Bind("sendNativeNotification", func(title, body, iconDataURL string) {
+		icon := decodeDataURL(iconDataURL)
+		go trayBalloon(title, body, icon)
 	})
 
 	uaJSON, _ := json.Marshal(userAgent)
@@ -378,11 +441,39 @@ func Run() int {
 		// Native Notification Polyfill for Windows Tray Balloon
 		(function() {
 			var hasBridge = typeof window.sendNativeNotification === 'function';
+
+			// Re-encode the sender avatar as a PNG data URL the native side can
+			// turn into an icon. WhatsApp hands us a blob: URL, which is
+			// same-origin and therefore does not taint the canvas.
+			function avatarDataURL(url) {
+				if (!url) { return Promise.resolve(''); }
+				return fetch(url)
+					.then(function(r) { return r.blob(); })
+					.then(function(blob) { return createImageBitmap(blob); })
+					.then(function(bmp) {
+						var size = 64;
+						var canvas = document.createElement('canvas');
+						canvas.width = size;
+						canvas.height = size;
+						canvas.getContext('2d').drawImage(bmp, 0, 0, size, size);
+						bmp.close();
+						return canvas.toDataURL('image/png');
+					})
+					.catch(function() { return ''; });
+			}
+
 			window.Notification = function(title, options) {
 				options = options || {};
 				var body = options.body || '';
 				if (hasBridge) {
-					window.sendNativeNotification(String(title), String(body));
+					// Never let a slow avatar fetch hold up the notification.
+					var timeout = new Promise(function(resolve) {
+						setTimeout(function() { resolve(''); }, 1500);
+					});
+					Promise.race([avatarDataURL(options.icon), timeout])
+						.then(function(icon) {
+							window.sendNativeNotification(String(title), String(body), icon || '');
+						});
 				}
 				this.title = title;
 				this.onclick = null;
