@@ -19,13 +19,14 @@
 | Feature | Details |
 |---------|---------|
 | Ultra-lightweight | ~3 MB executable, no bundled browser engine |
+| Multiple accounts | Run several WhatsApp accounts at once, each with its own session, tray icon and notifications |
 | System tray | Minimize to tray on close, restore with single click |
 | Dark mode | Native dark title bar and window frame |
 | Persistent session | WhatsApp login survives app restarts |
-| Window memory | Remembers size and position between sessions |
-| Notifications | Tray balloon notifications for incoming messages |
+| Window memory | Remembers size, position and maximized state, per account |
+| Notifications | Shows the sender's profile picture, falling back to the app icon |
 | Calls support | Camera and microphone passthrough for voice/video calls |
-| Single instance | Only one window at a time, duplicate launches auto-focus existing window |
+| Single instance | One window per account; launching again focuses the window that is already open |
 | High-DPI | Full PerMonitorV2 DPI awareness |
 | Auto-detect WebView2 | Shows install prompt if WebView2 Runtime is missing |
 
@@ -49,15 +50,32 @@
 
 > The setup installs the app under `%LOCALAPPDATA%\Programs\WaDeskLight` and creates a **WhatsApp** shortcut, so it shows up when you search "wa" in Windows. A portable `WhatsApp.exe` is also available for those who prefer no installer.
 
+## Multiple Accounts
+
+Open the account switcher from the round button in WhatsApp's left sidebar, just above the Media and profile icons. From there you can:
+
+- **Switch** to another account — the window keeps its current size, position and maximized state, so nothing resizes on the way
+- **Add an account** — opens a new window with a fresh QR code
+- **Rename** the account you are in
+- **Remove** the account you are in, deleting its stored session
+
+Every account runs as its own process with its own storage profile, so all of them stay connected and notify you independently — you never miss a message because an account was not on screen. Accounts left open when you quit are reopened next time; choosing **Exit** from an account's tray menu keeps that one closed.
+
+The tray menu carries the same account list as a shortcut, so you can switch without opening a window first.
+
+> Each account runs its own WebView2 instance, so memory use grows roughly in step with the number of accounts you keep open.
+
 ## Session & Data
 
 All profile data (cookies, localStorage, IndexedDB) is stored locally:
 
 ```text
-%APPDATA%\WaDeskLight\UserData
+%APPDATA%\WaDeskLight\UserData                  # first account
+%APPDATA%\WaDeskLight\profiles\<id>\UserData    # additional accounts
+%APPDATA%\WaDeskLight\accounts.json             # the account list
 ```
 
-Back up this folder to preserve your login. Deleting it will require re-pairing your device.
+Back up these folders to preserve your logins. Deleting one will require re-pairing that device.
 
 ## Building from Source
 
@@ -86,18 +104,20 @@ The output `dist\WhatsApp.exe` includes embedded icon, DPI manifest, and Windows
 - **WebView:** [go-webview2](https://github.com/jchv/go-webview2) (Microsoft Edge WebView2)
 - **Tray:** Win32 `Shell_NotifyIconW` API
 - **Window frame:** `DwmSetWindowAttribute` for dark mode
-- **Notifications:** System tray balloon via `NIF_INFO`
+- **Notifications:** System tray balloon via `NIF_INFO`, with the sender's avatar supplied as a custom `hBalloonIcon`
+- **Accounts:** One WebView2 storage profile and one process per account; the switcher is injected into the page inside a shadow root
+- **Idle memory:** `ICoreWebView2_19::put_MemoryUsageTargetLevel` while minimised to tray
 
 ## Project Layout
 
 ```
-whatsapp-web.view/
+WaDeskLight/
 ├── cmd/
 │   └── wadesklight/
 │       ├── main.go        # Thin entry point
 │       └── rsrc.syso      # Compiled Windows resources (icon, manifest, version) 
 ├── internal/
-│   ├── app/               # WebView2 window, tray, notifications, state persistence
+│   ├── app/               # WebView2 window, tray, notifications, accounts, state persistence
 │   └── audio/             # Core Audio session labeler (volume mixer shows "WhatsApp")
 ├── assets/                # icon.ico (multi-size), icon.png, banner.png
 ├── build/                 # winres.json, winres/ data, app.manifest (resources source)
