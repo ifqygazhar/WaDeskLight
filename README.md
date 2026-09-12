@@ -50,6 +50,10 @@
 
 > The setup installs the app under `%LOCALAPPDATA%\Programs\WaDeskLight` and creates a **WhatsApp** shortcut, so it shows up when you search "wa" in Windows. A portable `WhatsApp.exe` is also available for those who prefer no installer.
 
+### macOS
+
+Coming soon — the macOS build is in progress.
+
 ## Multiple Accounts
 
 Open the account switcher from the round button in WhatsApp's left sidebar, just above the Media and profile icons. From there you can:
