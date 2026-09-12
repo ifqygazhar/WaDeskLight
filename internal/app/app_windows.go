@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,7 +40,19 @@ type windowState struct {
 	Y      int32 `json:"y"`
 	Width  int32 `json:"width"`
 	Height int32 `json:"height"`
-	Saved  bool  `json:"saved"`
+	// Maximized is tracked separately because a maximized window's rect is not
+	// a size worth restoring; only the show state reproduces it faithfully.
+	Maximized bool `json:"maximized"`
+	Saved     bool `json:"saved"`
+}
+
+type windowPlacement struct {
+	Length           uint32
+	Flags            uint32
+	ShowCmd          uint32
+	PtMinPosition    point
+	PtMaxPosition    point
+	RcNormalPosition rect
 }
 
 type notifyIconData struct {
@@ -64,6 +77,13 @@ var (
 	gWinProc uintptr
 	gOldProc uintptr
 	gTray    notifyIconData
+
+	// Identity of the account this process serves.
+	gProfileID   = defaultProfileID
+	gWindowTitle = windowTitle
+	// Set when the user asks to remove this account; acted on after the
+	// WebView2 instance is torn down and its files are unlocked.
+	gPendingRemove bool
 
 	gTrayMu sync.Mutex
 	// Large app icon used as the balloon icon when a message carries no avatar.
@@ -109,10 +129,10 @@ func setDarkWindowFrame(hwnd uintptr) {
 }
 
 func checkSingleInstance() (uintptr, bool) {
-	namePtr, _ := syscall.UTF16PtrFromString(mutexName)
+	namePtr, _ := syscall.UTF16PtrFromString(mutexName + "_" + gProfileID)
 	handle, _, err := procCreateMutex.Call(0, 1, uintptr(unsafe.Pointer(namePtr)))
 	if err == windows.ERROR_ALREADY_EXISTS {
-		titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
+		titlePtr, _ := syscall.UTF16PtrFromString(gWindowTitle)
 		hwnd, _, _ := procFindWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 		if hwnd != 0 {
 			procShowWindow.Call(hwnd, swRestore)
@@ -137,13 +157,11 @@ func getConfigDir() string {
 }
 
 func getUserDataDir() string {
-	dir := filepath.Join(getConfigDir(), "UserData")
-	_ = os.MkdirAll(dir, 0755)
-	return dir
+	return userDataDirFor(gProfileID)
 }
 
 func windowStatePath() string {
-	return filepath.Join(getConfigDir(), "window.json")
+	return windowStatePathFor(gProfileID)
 }
 
 func loadWindowState() windowState {
@@ -156,9 +174,9 @@ func loadWindowState() windowState {
 	return st
 }
 
-func saveWindowState(st *windowState) {
+func saveWindowStateTo(path string, st windowState) {
 	data, _ := json.Marshal(st)
-	_ = os.WriteFile(windowStatePath(), data, 0644)
+	_ = os.WriteFile(path, data, 0644)
 }
 
 func webView2RuntimeInstalled() bool {
@@ -178,10 +196,15 @@ func webView2RuntimeInstalled() bool {
 	return false
 }
 
-func showErrorDialog(message string) {
-	titlePtr, _ := windows.UTF16PtrFromString(windowTitle)
+func messageBox(parent uintptr, message, title string, flags uintptr) int {
+	titlePtr, _ := windows.UTF16PtrFromString(title)
 	msgPtr, _ := windows.UTF16PtrFromString(message)
-	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(msgPtr)), uintptr(unsafe.Pointer(titlePtr)), 0x10 /*MB_ICONERROR*/)
+	r, _, _ := procMessageBoxW.Call(parent, uintptr(unsafe.Pointer(msgPtr)), uintptr(unsafe.Pointer(titlePtr)), flags)
+	return int(r)
+}
+
+func showErrorDialog(message string) {
+	messageBox(0, message, windowTitle, mbIconError)
 }
 
 func strPtr(s string) uintptr {
@@ -219,7 +242,7 @@ func trayAdd(hwnd uintptr, iconPath string) {
 	nid.uFlags = nifMessage | nifIcon | nifTip
 	nid.uCallbackMessage = wmTrayCallback
 	nid.hIcon = loadTrayIcon(iconPath, 16)
-	setTip(&nid, "WaDeskLight")
+	setTip(&nid, gWindowTitle)
 	gAppBalloonIcon = loadTrayIcon(iconPath, 32)
 	gTray = nid
 	procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
@@ -289,23 +312,158 @@ func trayDelete() {
 	}
 }
 
-func saveWindowBounds(hwnd uintptr) {
-	var r rect
-	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-	st := windowState{
-		X:      r.Left,
-		Y:      r.Top,
-		Width:  r.Right - r.Left,
-		Height: r.Bottom - r.Top,
-		Saved:  true,
+// captureWindowState reads the window's restored geometry and whether it is
+// maximized. It reports false while the window is hidden in the tray, where the
+// placement says nothing useful and the last saved state should stand.
+func captureWindowState(hwnd uintptr) (windowState, bool) {
+	var wp windowPlacement
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	if r, _, _ := procGetWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp))); r == 0 {
+		return windowState{}, false
 	}
-	saveWindowState(&st)
+	if wp.ShowCmd == swHide {
+		return windowState{}, false
+	}
+	return windowState{
+		X:         wp.RcNormalPosition.Left,
+		Y:         wp.RcNormalPosition.Top,
+		Width:     wp.RcNormalPosition.Right - wp.RcNormalPosition.Left,
+		Height:    wp.RcNormalPosition.Bottom - wp.RcNormalPosition.Top,
+		Maximized: wp.ShowCmd == swShowMaximized,
+		Saved:     true,
+	}, true
 }
 
+// applyWindowState works across processes, so it can also size another
+// account's window.
+func applyWindowState(hwnd uintptr, st windowState) {
+	if !st.Saved {
+		return
+	}
+	wp := windowPlacement{
+		ShowCmd: swShowNormal,
+		RcNormalPosition: rect{
+			Left: st.X, Top: st.Y,
+			Right: st.X + st.Width, Bottom: st.Y + st.Height,
+		},
+	}
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	if st.Maximized {
+		wp.ShowCmd = swShowMaximized
+	}
+	procSetWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp)))
+}
+
+func saveWindowBounds(hwnd uintptr) {
+	if st, ok := captureWindowState(hwnd); ok {
+		saveWindowStateTo(windowStatePath(), st)
+	}
+}
+
+// restoreWindow brings the window back exactly as it was left. SW_RESTORE alone
+// would un-maximize a window that was maximized when it went to the tray.
 func restoreWindow(hwnd uintptr) {
-	setMemoryUsageTargetLevel(memoryUsageNormal)
-	procShowWindow.Call(hwnd, swRestore)
+	show := uintptr(swRestore)
+	if st := loadWindowState(); st.Saved && st.Maximized {
+		show = swShowMaximized
+	}
+	procShowWindow.Call(hwnd, show)
 	procSetFgWindow.Call(hwnd)
+}
+
+func windowTitleFor(name string) string {
+	return windowTitle + " — " + name
+}
+
+// validProfileID guards the profile name before it reaches the filesystem.
+func validProfileID(id string) bool {
+	if id == "" || len(id) > 32 {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// profileFromArgs reports which account this process was launched for, and
+// whether it was named explicitly. Only the implicit launch restores the rest
+// of the previous session.
+func profileFromArgs() (string, bool) {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		var id string
+		switch {
+		case strings.HasPrefix(args[i], "--profile="):
+			id = strings.TrimPrefix(args[i], "--profile=")
+		case args[i] == "--profile" && i+1 < len(args):
+			id = args[i+1]
+		default:
+			continue
+		}
+		if validProfileID(id) {
+			return id, true
+		}
+		return defaultProfileID, false
+	}
+	return defaultProfileID, false
+}
+
+func spawnAccount(id string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "--profile", id)
+	if cmd.Start() == nil && cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+}
+
+// focusAccount brings another account's window forward, starting it if it is
+// not running yet.
+func focusAccount(from uintptr, a account) {
+	// Carry this window's placement over so switching reads as one window
+	// changing account, rather than a smaller new window appearing.
+	st, _ := captureWindowState(from)
+	titlePtr, _ := windows.UTF16PtrFromString(windowTitleFor(a.Name))
+	target, _, _ := procFindWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+	if target != 0 {
+		applyWindowState(target, st)
+		procSetFgWindow.Call(target)
+		return
+	}
+	// Not running yet: leave the geometry where the new process will read it,
+	// so its very first paint is already the right size.
+	if st.Saved {
+		saveWindowStateTo(windowStatePathFor(a.ID), st)
+	}
+	spawnAccount(a.ID)
+}
+
+func applyAccountName(hwnd uintptr, name string) {
+	gWindowTitle = windowTitleFor(name)
+	titlePtr, _ := windows.UTF16PtrFromString(gWindowTitle)
+	procSetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(titlePtr)))
+
+	gTrayMu.Lock()
+	defer gTrayMu.Unlock()
+	if gTray.hWnd == 0 {
+		return
+	}
+	gTray.uFlags = nifMessage | nifIcon | nifTip
+	setTip(&gTray, gWindowTitle)
+	procShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&gTray)))
+}
+
+func quitInstance(hwnd uintptr) {
+	saveWindowBounds(hwnd)
+	trayDelete()
+	procPostQuitMessage.Call(0)
 }
 
 func showTrayMenu(hwnd uintptr) {
@@ -315,18 +473,44 @@ func showTrayMenu(hwnd uintptr) {
 		return
 	}
 	procAppendMenuW.Call(menu, 0, menuOpen, strPtr("Open WaDeskLight"))
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+
+	accounts := loadAccounts()
+	for i, a := range accounts {
+		flags := uintptr(0)
+		if a.ID == gProfileID {
+			flags = mfChecked
+		}
+		procAppendMenuW.Call(menu, flags, uintptr(menuAccountBase+i), strPtr(a.Name))
+	}
+
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	procAppendMenuW.Call(menu, 0, menuAdd, strPtr("Add Account"))
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	procAppendMenuW.Call(menu, 0, menuExit, strPtr("Exit"))
+
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	cmd, _, _ := procTrackPopupMenu.Call(menu, tpmReturnCmd|tpmRightBtn|tpmBottom, uintptr(pt.X), uintptr(pt.Y), 0, hwnd, 0)
 	procDestroyMenu.Call(menu)
-	switch cmd {
-	case menuOpen:
+
+	switch {
+	case cmd == menuOpen:
 		restoreWindow(hwnd)
-	case menuExit:
-		saveWindowBounds(hwnd)
-		trayDelete()
-		procPostQuitMessage.Call(0)
+	case cmd == menuExit:
+		// A deliberate exit opts this account out of the next restore.
+		setAutostart(gProfileID, false)
+		quitInstance(hwnd)
+	case cmd == menuAdd:
+		focusAccount(hwnd, addAccount())
+	case cmd >= menuAccountBase:
+		if i := int(cmd) - menuAccountBase; i < len(accounts) {
+			if accounts[i].ID == gProfileID {
+				restoreWindow(hwnd)
+			} else {
+				focusAccount(hwnd, accounts[i])
+			}
+		}
 	}
 }
 
@@ -339,6 +523,12 @@ func windowProc(hwnd, msg, wp, lp uintptr) uintptr {
 		setMemoryUsageTargetLevel(memoryUsageLow)
 		go trayBalloon("WaDeskLight", "Masih berjalan di system tray. Klik ikon untuk membuka kembali.", nil)
 		return 0
+	case wmShowWindow:
+		if wp != 0 {
+			setMemoryUsageTargetLevel(memoryUsageNormal)
+		}
+		r, _, _ := procCallWindowProcW.Call(gOldProc, hwnd, msg, wp, lp)
+		return r
 	case wmTrayCallback:
 		switch uint32(lp) & 0xFFFF {
 		case wmLButtonUp, wmLButtonDblClk, ninBalloonUserClick:
@@ -361,10 +551,15 @@ func installWindowSubclass(hwnd uintptr) {
 // Run starts the WaDeskLight window and blocks until the app exits.
 // It returns the process exit code.
 func Run() int {
+	profileID, explicit := profileFromArgs()
+	gProfileID = profileID
+	gWindowTitle = windowTitleFor(ensureAccount(profileID).Name)
+
 	_, isSingle := checkSingleInstance()
 	if !isSingle {
 		return 0
 	}
+	setAutostart(gProfileID, true)
 
 	if !webView2RuntimeInstalled() {
 		showErrorDialog("WebView2 Runtime tidak ditemukan.\n\nSilakan install Microsoft Edge WebView2 Runtime dari:\nhttps://developer.microsoft.com/microsoft-edge/webview2/")
@@ -404,26 +599,77 @@ func Run() int {
 		showErrorDialog("Gagal menginisialisasi WebView2. Pastikan Microsoft Edge WebView2 Runtime terinstall.")
 		return 1
 	}
+	// Registered before w.Destroy so it runs after it, once WebView2 has let go
+	// of the profile's files.
+	defer func() {
+		if gPendingRemove {
+			removeAccount(gProfileID)
+		}
+	}()
 	defer w.Destroy()
 	initMemoryControl(w)
 	audio.StartLabeler()
+
+	// Only an implicit launch reopens the accounts from the previous session;
+	// an explicit --profile starts exactly the one account it names.
+	if !explicit {
+		for _, a := range loadAccounts() {
+			if a.ID != gProfileID && a.Autostart {
+				spawnAccount(a.ID)
+			}
+		}
+	}
 
 	hwnd := uintptr(w.Window())
 	setDarkWindowFrame(hwnd)
 
 	// Restore window size/position from the previous session, if any.
-	if st := loadWindowState(); st.Saved {
-		procSetWindowPos.Call(hwnd, 0, uintptr(uint32(st.X)), uintptr(uint32(st.Y)), uintptr(uint32(st.Width)), uintptr(uint32(st.Height)), swpNoZOrder|swpNoActivate)
-	}
+	applyWindowState(hwnd, loadWindowState())
 
 	installWindowSubclass(hwnd)
 	trayAdd(hwnd, iconFullPath)
 	defer trayDelete()
 
-	w.SetTitle(windowTitle)
+	w.SetTitle(gWindowTitle)
 	_ = w.Bind("sendNativeNotification", func(title, body, iconDataURL string) {
 		icon := decodeDataURL(iconDataURL)
 		go trayBalloon(title, body, icon)
+	})
+
+	type accountsView struct {
+		Current  string    `json:"current"`
+		Accounts []account `json:"accounts"`
+	}
+	_ = w.Bind("wadeskAccountsState", func() accountsView {
+		return accountsView{Current: gProfileID, Accounts: loadAccounts()}
+	})
+	_ = w.Bind("wadeskAccountSwitch", func(id string) {
+		for _, a := range loadAccounts() {
+			if a.ID == id && a.ID != gProfileID {
+				focusAccount(hwnd, a)
+				return
+			}
+		}
+	})
+	_ = w.Bind("wadeskAccountAdd", func() {
+		focusAccount(hwnd, addAccount())
+	})
+	_ = w.Bind("wadeskAccountRename", func(id, name string) {
+		renameAccount(id, name)
+		if id == gProfileID {
+			w.Dispatch(func() { applyAccountName(hwnd, accountName(id)) })
+		}
+	})
+	// Only the account you are looking at can be removed: another instance owns
+	// its own window and files, and has no channel to be told to shut down.
+	_ = w.Bind("wadeskAccountRemove", func(id string) {
+		if id != gProfileID || id == defaultProfileID {
+			return
+		}
+		w.Dispatch(func() {
+			gPendingRemove = true
+			quitInstance(hwnd)
+		})
 	})
 
 	uaJSON, _ := json.Marshal(userAgent)
@@ -495,6 +741,7 @@ func Run() int {
 	`, string(uaJSON))
 
 	w.Init(initScript)
+	w.Init(accountOverlayScript)
 	w.Navigate(appURL)
 	w.Run()
 

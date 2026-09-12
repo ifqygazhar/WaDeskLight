@@ -1,0 +1,299 @@
+//go:build windows
+
+package app
+
+// accountOverlayScript renders the in-page account switcher. It lives in a
+// shadow root attached to documentElement, so WhatsApp's styles and React
+// re-renders cannot reach it and ours cannot leak into the page.
+const accountOverlayScript = `
+(function () {
+	if (typeof window.wadeskAccountsState !== 'function') { return; }
+
+	var CSS = [
+		'.btn { position: fixed; left: 12px; bottom: 14px; width: 38px; height: 38px;',
+		'  border-radius: 50%; background: #202c33; color: #e9edef; border: 1px solid #2a3942;',
+		'  cursor: pointer; font: 600 14px system-ui, sans-serif; display: flex;',
+		'  align-items: center; justify-content: center; opacity: .7; box-sizing: border-box; }',
+		'.btn:hover { opacity: 1; background: #2a3942; }',
+		'.panel { position: fixed; left: 12px; bottom: 60px; width: 258px; background: #233138;',
+		'  border: 1px solid #2a3942; border-radius: 10px; padding: 6px; color: #e9edef;',
+		'  font: 400 13px system-ui, sans-serif; box-shadow: 0 8px 28px rgba(0,0,0,.45); }',
+		'.hdr { padding: 8px 10px 6px; font-size: 11px; letter-spacing: .08em;',
+		'  text-transform: uppercase; color: #8696a0; }',
+		'.row { display: flex; align-items: center; gap: 8px; padding: 8px 10px;',
+		'  border-radius: 6px; cursor: pointer; }',
+		'.row:hover { background: #2a3942; }',
+		'.row.on { cursor: default; }',
+		'.tick { width: 14px; color: #00a884; }',
+		'.nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+		'.sep { height: 1px; background: #2a3942; margin: 6px 4px; }',
+		'.act { display: flex; align-items: center; gap: 8px; padding: 8px 10px;',
+		'  border-radius: 6px; cursor: pointer; color: #d1d7db; }',
+		'.act:hover { background: #2a3942; }',
+		'.act.danger:hover { background: #3c2226; color: #f15c6d; }',
+		'.gl { width: 14px; text-align: center; color: #8696a0; }',
+		'.msg { padding: 8px 10px; color: #8696a0; line-height: 1.45; }',
+		'input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;',
+		'  border: 1px solid #2a3942; background: #111b21; color: #e9edef;',
+		'  font: 400 13px system-ui, sans-serif; }',
+		'input:focus { outline: none; border-color: #00a884; }',
+		'.btns { display: flex; gap: 6px; padding: 8px 4px 4px; }',
+		'.btns button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #2a3942;',
+		'  background: #202c33; color: #e9edef; cursor: pointer;',
+		'  font: 500 13px system-ui, sans-serif; }',
+		'.btns button:hover { background: #2a3942; }',
+		'.btns button.go { background: #00a884; border-color: #00a884; color: #0b141a; }',
+		'.btns button.go.danger { background: #f15c6d; border-color: #f15c6d; }'
+	].join(' ');
+
+	var host = null, root = null, state = null, mode = 'list', open = false;
+
+	function mount() {
+		if (host && document.documentElement.contains(host)) { return; }
+		host = document.createElement('div');
+		host.setAttribute('data-wadesklight', 'accounts');
+		// The host lives in WhatsApp's light DOM, so its own box must be pinned
+		// down explicitly; page rules could otherwise hide it and take the
+		// shadow content with it.
+		var pin = {
+			display: 'block', position: 'fixed', left: '0', top: '0',
+			width: '0', height: '0', margin: '0', padding: '0', border: '0',
+			visibility: 'visible', opacity: '1', 'z-index': '2147483000'
+		};
+		Object.keys(pin).forEach(function (k) {
+			host.style.setProperty(k, pin[k], 'important');
+		});
+		document.documentElement.appendChild(host);
+		root = host.attachShadow({ mode: 'open' });
+		try {
+			var sheet = new CSSStyleSheet();
+			sheet.replaceSync(CSS);
+			root.adoptedStyleSheets = [sheet];
+		} catch (e) {
+			var tag = document.createElement('style');
+			tag.textContent = CSS;
+			root.appendChild(tag);
+		}
+		render();
+	}
+
+	function refresh() {
+		return window.wadeskAccountsState().then(function (s) {
+			state = s;
+			render();
+		}).catch(function () {});
+	}
+
+	function el(tag, cls, text) {
+		var n = document.createElement(tag);
+		if (cls) { n.className = cls; }
+		if (text !== undefined) { n.textContent = text; }
+		return n;
+	}
+
+	function currentName() {
+		if (!state) { return 'Account'; }
+		for (var i = 0; i < state.accounts.length; i++) {
+			if (state.accounts[i].id === state.current) { return state.accounts[i].name; }
+		}
+		return 'Account';
+	}
+
+	function currentIndex() {
+		if (!state) { return 1; }
+		for (var i = 0; i < state.accounts.length; i++) {
+			if (state.accounts[i].id === state.current) { return i + 1; }
+		}
+		return 1;
+	}
+
+	// WhatsApp's rail groups Media and You in a footer section, and spaces its
+	// items on a 44px pitch. Sitting our button directly above that section
+	// keeps it clear of both and makes it track any resize, since the rail's own
+	// box is what we measure.
+	function anchorButton() {
+		var btn = root && root.querySelector('.btn');
+		if (!btn) { return; }
+		var footer = document.querySelector('[data-testid="navbar-footer-section"]');
+		var r = footer ? footer.getBoundingClientRect() : null;
+		if (r && r.width > 0 && r.height > 0) {
+			var size = Math.round(r.width);
+			var gap = Math.round(size * 0.1);
+			btn.style.left = Math.round(r.left) + 'px';
+			btn.style.top = Math.round(r.top - size - gap) + 'px';
+			btn.style.bottom = 'auto';
+			btn.style.width = size + 'px';
+			btn.style.height = size + 'px';
+			btn.style.fontSize = Math.max(12, Math.round(size * 0.36)) + 'px';
+			return;
+		}
+		// No rail yet (the QR screen has none): rest in the corner instead.
+		btn.style.left = '12px';
+		btn.style.top = 'auto';
+		btn.style.bottom = '14px';
+		btn.style.width = '38px';
+		btn.style.height = '38px';
+		btn.style.fontSize = '14px';
+	}
+
+	function anchorPanel(panel) {
+		var btn = root && root.querySelector('.btn');
+		if (!btn) { return; }
+		var r = btn.getBoundingClientRect();
+		panel.style.left = Math.round(r.right + 8) + 'px';
+		panel.style.bottom = Math.round(window.innerHeight - r.bottom) + 'px';
+	}
+
+	function render() {
+		if (!root) { return; }
+		root.querySelectorAll('.btn, .panel').forEach(function (n) { n.remove(); });
+
+		var btn = el('button', 'btn', String(currentIndex()));
+		btn.title = 'Accounts - ' + currentName();
+		btn.addEventListener('click', function (ev) {
+			ev.stopPropagation();
+			open = !open;
+			if (open) { mode = 'list'; refresh(); } else { render(); }
+		});
+		root.appendChild(btn);
+		anchorButton();
+		if (!open) { return; }
+
+		var panel = el('div', 'panel');
+		panel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+		if (mode === 'rename') { renderRename(panel); }
+		else if (mode === 'confirm') { renderConfirm(panel); }
+		else { renderList(panel); }
+		root.appendChild(panel);
+		anchorPanel(panel);
+	}
+
+	function renderList(panel) {
+		panel.appendChild(el('div', 'hdr', 'Accounts'));
+		var accounts = state ? state.accounts : [];
+		accounts.forEach(function (a) {
+			var isCurrent = a.id === state.current;
+			var row = el('div', isCurrent ? 'row on' : 'row');
+			row.appendChild(el('span', 'tick', isCurrent ? '✓' : ''));
+			row.appendChild(el('span', 'nm', a.name));
+			if (!isCurrent) {
+				row.addEventListener('click', function () {
+					window.wadeskAccountSwitch(a.id);
+					open = false;
+					render();
+				});
+			}
+			panel.appendChild(row);
+		});
+
+		panel.appendChild(el('div', 'sep'));
+
+		var add = el('div', 'act');
+		add.appendChild(el('span', 'gl', '+'));
+		add.appendChild(el('span', 'nm', 'Add account'));
+		add.addEventListener('click', function () {
+			window.wadeskAccountAdd();
+			open = false;
+			render();
+		});
+		panel.appendChild(add);
+
+		var ren = el('div', 'act');
+		ren.appendChild(el('span', 'gl', '✎'));
+		ren.appendChild(el('span', 'nm', 'Rename this account'));
+		ren.addEventListener('click', function () { mode = 'rename'; render(); });
+		panel.appendChild(ren);
+
+		// The first account is the app's own profile and cannot be removed.
+		if (state && state.accounts.length && state.current !== state.accounts[0].id) {
+			var del = el('div', 'act danger');
+			del.appendChild(el('span', 'gl', '✕'));
+			del.appendChild(el('span', 'nm', 'Remove this account'));
+			del.addEventListener('click', function () { mode = 'confirm'; render(); });
+			panel.appendChild(del);
+		}
+	}
+
+	function renderRename(panel) {
+		panel.appendChild(el('div', 'hdr', 'Rename account'));
+		var input = document.createElement('input');
+		input.value = currentName();
+		input.maxLength = 40;
+		panel.appendChild(input);
+
+		var commit = function () {
+			var name = input.value.trim();
+			if (name) { window.wadeskAccountRename(state.current, name); }
+			mode = 'list';
+			setTimeout(refresh, 80);
+		};
+		input.addEventListener('keydown', function (ev) {
+			if (ev.key === 'Enter') { commit(); }
+			if (ev.key === 'Escape') { mode = 'list'; render(); }
+		});
+
+		var btns = el('div', 'btns');
+		var cancel = el('button', '', 'Cancel');
+		cancel.addEventListener('click', function () { mode = 'list'; render(); });
+		var save = el('button', 'go', 'Save');
+		save.addEventListener('click', commit);
+		btns.appendChild(cancel);
+		btns.appendChild(save);
+		panel.appendChild(btns);
+		setTimeout(function () { input.focus(); input.select(); }, 0);
+	}
+
+	function renderConfirm(panel) {
+		panel.appendChild(el('div', 'hdr', 'Remove account'));
+		panel.appendChild(el('div', 'msg',
+			'Remove "' + currentName() + '"? Its WhatsApp session will be deleted from ' +
+			'this computer and you will need to scan the QR code again.'));
+		var btns = el('div', 'btns');
+		var cancel = el('button', '', 'Cancel');
+		cancel.addEventListener('click', function () { mode = 'list'; render(); });
+		var go = el('button', 'go danger', 'Remove');
+		go.addEventListener('click', function () { window.wadeskAccountRemove(state.current); });
+		btns.appendChild(cancel);
+		btns.appendChild(go);
+		panel.appendChild(btns);
+	}
+
+	document.addEventListener('click', function () {
+		if (open) { open = false; render(); }
+	});
+
+	function reanchor() {
+		anchorButton();
+		var panel = root && root.querySelector('.panel');
+		if (panel) { anchorPanel(panel); }
+	}
+
+	function boot() {
+		try {
+			mount();
+			refresh();
+		} catch (e) {
+			// Retried by the tick below.
+		}
+	}
+
+	window.addEventListener('resize', reanchor);
+
+	// The script runs before the parser has built <html>, a hard navigation
+	// discards what we appended, and the rail shifts as WhatsApp loads, so both
+	// are re-checked on a slow tick.
+	setInterval(function () {
+		if (!host || !document.documentElement || !document.documentElement.contains(host)) {
+			boot();
+		} else {
+			reanchor();
+		}
+	}, 1000);
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', boot);
+	} else {
+		boot();
+	}
+})();
+`
