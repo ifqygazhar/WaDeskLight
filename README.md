@@ -29,6 +29,16 @@
 | High-DPI | Full PerMonitorV2 DPI awareness |
 | Auto-detect WebView2 | Shows install prompt if WebView2 Runtime is missing |
 
+## Screenshots
+
+### WebView2 Process Usage
+
+<img src="screenshot-webview2-manager.png" alt="WebView2 Manager processes used by WhatsApp Web" width="100%">
+
+### WaDeskLight Process Usage
+
+<img src="screenshot-wadesklight-task-manager.png" alt="WaDeskLight process in Windows Task Manager" width="100%">
+
 ## Quick Start
 
 1. Download [`WaDeskLightSetup.exe`](https://github.com/rayss868/WaDeskLight/releases/latest) from Releases
